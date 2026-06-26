@@ -45,7 +45,7 @@ st.markdown("""
         margin-bottom: 15px;
     }
     </style>
-""", unsafe_scale=True)
+""", unsafe_allow_html=True)
 
 # 2. Data Loading & Cleaning Functions
 @st.cache_data
@@ -382,14 +382,13 @@ with tab3:
                 fig_roc.update_layout(
                     title="ROC Curve Model Stability Comparison",
                     xaxis_title="False Positive Rate",
-                    yaxis_title="True Positive Rate",
+                    yaxis_title="True movie Rate",
                     height=500
                 )
                 st.plotly_chart(fig_roc, use_container_width=True)
                 
             with col_m2:
                 st.markdown("#### 🧩 Confusion Matrices Grid")
-                # Using matplotlib to quickly map a clean multi-grid matrix
                 fig_cm, axes = plt.subplots(2, 2, figsize=(10, 8))
                 axes = axes.ravel()
                 
