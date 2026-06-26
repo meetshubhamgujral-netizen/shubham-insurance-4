@@ -1,3 +1,6 @@
+
+import warnings
+warnings.filterwarnings("ignore")
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,370 +9,568 @@ import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
 
-# 1. Page Configuration & Theme Settings
+# ---------------------------------------------------------------------------------------
+# I. APPLICATION PAGE INITIALIZATION & PREMIUM THEME DESIGN
+# ---------------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Claims Bias & Predictive Analytics Dashboard",
+    page_title="Enterprise Claims Bias Adjudication & Predictive Analytics Dashboard",
     layout="wide",
-    page_icon="⚖️"
+    page_icon="⚖️",
+    initial_sidebar_state="expanded"
 )
 
-# Custom colorful professional styling
+# Custom premium styling matrix via standard markdown blocks
 st.markdown("""
     <style>
+    .reportview-container { background: #F8FAFC; }
     .main-header {
-        background-color: #1E3A8A;
-        padding: 20px;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 100%);
+        padding: 30px;
+        border-radius: 12px;
         color: white;
         text-align: center;
-        margin-bottom: 25px;
+        margin-bottom: 30px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
-    .metric-box {
-        background-color: #F3F4F6;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 5px solid #3B82F6;
+    .metric-card-wrapper {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        border-top: 5px solid #3B82F6;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        text-align: center;
+    }
+    .insight-card {
+        background-color: #F8FAFC;
+        border-left: 5px solid #1E3A8A;
+        padding: 20px;
+        border-radius: 6px;
+        margin-top: 15px;
         margin-bottom: 15px;
     }
-    .bias-alert {
+    .anomaly-alert-card {
         background-color: #FEF2F2;
-        padding: 15px;
-        border-radius: 8px;
         border-left: 5px solid #EF4444;
+        padding: 20px;
+        border-radius: 6px;
+        margin-top: 15px;
         margin-bottom: 15px;
+    }
+    div.stButton > button:first-child {
+        background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
+        color: white;
+        font-weight: bold;
+        border: none;
+        padding: 12px 30px;
+        border-radius: 6px;
+        transition: all 0.3s ease;
+    }
+    div.stButton > button:first-child:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
     }
     </style>
 """, unsafe_allow_html=True)
 
-# 2. Data Loading & Cleaning Functions
+# ---------------------------------------------------------------------------------------
+# II. ROBUST DATA SCRUBBING & INTERACTION PIPELINE
+# ---------------------------------------------------------------------------------------
 @st.cache_data
-def load_and_clean_data(filepath="Insurance.csv"):
-    try:
-        df = pd.read_csv(filepath)
-    except FileNotFoundError:
-        return None
-
-    for col in ['SUM_ASSURED', 'PI_ANNUAL_INCOME']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '').str.strip()
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            
-    if 'PI_OCCUPATION' in df.columns:
-        df['PI_OCCUPATION'] = df['PI_OCCUPATION'].fillna('Unknown')
-    if 'REASON_FOR_CLAIM' in df.columns:
-        df['REASON_FOR_CLAIM'] = df['REASON_FOR_CLAIM'].fillna('Not Disclosed')
+def process_and_clean_claims_data(file_source, tail_cardinality_threshold=10):
+    """
+    Cleans structural numeric strings, normalizes case syntax variations, 
+    isolates zero entries as structural markers, and caps out severe long tails.
+    """
+    if isinstance(file_source, str):
+        try:
+            raw_data = pd.read_csv(file_source)
+        except FileNotFoundError:
+            return None
+    else:
+        raw_data = pd.read_csv(file_source)
         
-    return df
+    working_df = raw_data.copy()
+    
+    # Strip formatting structures and push to numeric arrays
+    for financial_col in ['SUM_ASSURED', 'PI_ANNUAL_INCOME']:
+        if financial_col in working_df.columns:
+            working_df[financial_col] = working_df[financial_col].astype(str).str.replace(r'[,\s]', '', regex=True)
+            working_df[financial_col] = pd.to_numeric(working_df[financial_col], errors='coerce').fillna(0)
+            
+    # Resolve structural textual inconsistencies and handle missing data allocations
+    text_imputation_map = {'PI_OCCUPATION': 'Unknown', 'REASON_FOR_CLAIM': 'Not Disclosed', 'ZONE': 'UNKNOWN'}
+    for text_col, fill_val in text_imputation_map.items():
+        if text_col in working_df.columns:
+            working_df[text_col] = working_df[text_col].fillna(fill_val).astype(str).str.strip().str.upper()
 
-# Main Header
-st.markdown('<div class="main-header"><h1>⚖️ Insurance Claim Settlement Bias & Predictive Dashboard</h1><p>An Advanced Analytical Tool for Claim Officers to Detect Operational Biases and Train Super-Learning Classifiers</p></div>', unsafe_allow_html=True)
+    # Address casing anomalies across structural elements (e.g., South vs SOUTH)
+    categorical_targets = ['PI_GENDER', 'PAYMENT_MODE', 'EARLY_NON', 'MEDICAL_NONMED', 'PI_STATE', 'POLICY_STATUS']
+    for cat_col in categorical_targets:
+        if cat_col in working_df.columns:
+            working_df[cat_col] = working_df[cat_col].astype(str).str.strip().str.upper()
 
-# File Management in Sidebar
-st.sidebar.header("📁 Data Source Settings")
-uploaded_file = st.sidebar.file_uploader("Upload your Insurance Dataset (CSV)", type=["csv"])
+    # Isolate missing or undeclared income entities
+    if 'PI_ANNUAL_INCOME' in working_df.columns:
+        working_df['INCOME_UNDECLARED_FLAG'] = np.where(working_df['PI_ANNUAL_INCOME'] == 0, 'TRUE', 'FALSE')
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    for col in ['SUM_ASSURED', 'PI_ANNUAL_INCOME']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '').str.strip()
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    if 'PI_OCCUPATION' in df.columns:
-        df['PI_OCCUPATION'] = df['PI_OCCUPATION'].fillna('Unknown')
-    if 'REASON_FOR_CLAIM' in df.columns:
-        df['REASON_FOR_CLAIM'] = df['REASON_FOR_CLAIM'].fillna('Not Disclosed')
+    # Mitigate overfitting by collapsing long-tail configurations into an 'OTHER' bin
+    high_card_fields = ['ZONE', 'PI_STATE', 'PI_OCCUPATION', 'REASON_FOR_CLAIM']
+    for field in high_card_fields:
+        if field in working_df.columns:
+            top_categories = working_df[field].value_counts().index[:tail_cardinality_threshold]
+            working_df[field] = np.where(working_df[field].isin(top_categories), working_df[field], 'OTHER_GROUP')
+            
+    # Automated generation of derivative features for model optimization
+    if 'PI_AGE' in working_df.columns:
+        working_df['AGE_BINS'] = pd.cut(
+            working_df['PI_AGE'], 
+            bins=[0, 30, 45, 60, 75, 120], 
+            labels=['UNDER 30', '30-45', '45-60', '60-75', 'ABOVE 75']
+        ).astype(str)
+        
+    if 'PI_ANNUAL_INCOME' in working_df.columns and 'SUM_ASSURED' in working_df.columns:
+        working_df['INCOME_TO_LEVERAGE_RATIO'] = working_df['PI_ANNUAL_INCOME'] / (working_df['SUM_ASSURED'] + 1)
+        
+    return working_df
+
+# ---------------------------------------------------------------------------------------
+# III. SIDEBAR CONTROL CONTROLLERS
+# ---------------------------------------------------------------------------------------
+st.sidebar.markdown("### 🛠️ Configuration Controls")
+uploaded_dataset = st.sidebar.file_uploader("Upload Core Claims Ledger (CSV Format)", type=["csv"])
+cardinality_limit = st.sidebar.slider("Capping Max Categories (High-Cardinality Fields)", 5, 25, 12)
+
+# Load target matrix structure
+if uploaded_dataset is not None:
+    df = process_and_clean_claims_data(uploaded_dataset, cardinality_limit)
 else:
-    df = load_and_clean_data()
+    df = process_and_clean_claims_data("Insurance.csv", cardinality_limit)
 
 if df is None:
-    st.error("⚠️ Insurance.csv file not found! Please place 'Insurance.csv' in the same folder or upload it via the sidebar.")
+    st.error("❌ Essential context ledger missing! Please upload a valid claims schema layout file via the dashboard sidebar configuration container.")
     st.stop()
 
-# Basic KPIs
-total_claims = len(df)
-approved_count = len(df[df['POLICY_STATUS'] == 'Approved Death Claim'])
-repudiated_count = len(df[df['POLICY_STATUS'] == 'Repudiate Death'])
-approval_rate = (approved_count / total_claims) * 100 if total_claims > 0 else 0
+# Validate status configurations
+if 'POLICY_STATUS' not in df.columns:
+    st.error("❌ Invalid target structural design! Data must hold a target column identified strictly as 'POLICY_STATUS'.")
+    st.stop()
 
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-with kpi1:
-    st.metric(label="📊 Total Claims Filed", value=f"{total_claims:,}")
-with kpi2:
-    st.metric(label="✅ Approved Claims", value=f"{approved_count:,}", delta=f"{approval_rate:.1f}% Rate")
-with kpi3:
-    st.metric(label="❌ Repudiated Claims", value=f"{repudiated_count:,}", delta=f"{100 - approval_rate:.1f}% Rate", delta_color="inverse")
-with kpi4:
-    st.metric(label="💰 Average Sum Assured", value=f"₹{df['SUM_ASSURED'].mean():,.2f}")
+# ---------------------------------------------------------------------------------------
+# IV. CORE KPI CONTAINER SUMMARY MATRICES
+# ---------------------------------------------------------------------------------------
+st.markdown('<div class="main-header"><h2>⚖️ Enterprise Claims Adjudication Auditing & Predictive Suite</h2><p>Advanced real-time systemic bias checking pipelines paired with parallel automated machine learning classifiers.</p></div>', unsafe_allow_html=True)
 
-# Initialize session state for tracking model results dynamically
-if 'ml_results' not in st.session_state:
-    st.session_state.ml_results = None
+total_records = len(df)
+all_statuses = df['POLICY_STATUS'].unique().tolist()
+primary_approved_str = [s for s in all_statuses if 'APPROV' in s]
+primary_approved_str = primary_approved_str[0] if primary_approved_str else (all_statuses[0] if all_statuses else "APPROVED")
 
-# 3. Create Operational Tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📋 Descriptive Cross-Tabs", 
-    "🔍 Diagnostic Bias Probing", 
-    "🤖 Super-Learning ML Models", 
-    "💡 Executive Insights & Findings"
+total_approvals = len(df[df['POLICY_STATUS'] == primary_approved_str])
+total_repudiations = total_records - total_approvals
+base_approval_rate = (total_approvals / total_records) * 100 if total_records > 0 else 0
+
+metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+with metric_col1:
+    st.markdown(f'<div class="metric-card-wrapper"><p style="color:#64748B;font-size:14px;margin:0;">TOTAL CLAIMS AUDITED</p><h2 style="color:#0F172A;margin:5px 0;">{total_records:,}</h2></div>', unsafe_allow_html=True)
+with metric_col2:
+    st.markdown(f'<div class="metric-card-wrapper" style="border-top-color:#10B981;"><p style="color:#64748B;font-size:14px;margin:0;">SYSTEMIC APPROVALS</p><h2 style="color:#10B981;margin:5px 0;">{total_approvals:,}</h2><span style="font-size:12px;color:#10B981;font-weight:bold;">{base_approval_rate:.2f}% Rate</span></div>', unsafe_allow_html=True)
+with metric_col3:
+    st.markdown(f'<div class="metric-card-wrapper" style="border-top-color:#EF4444;"><p style="color:#64748B;font-size:14px;margin:0;">SYSTEMIC REPUDIATIONS</p><h2 style="color:#EF4444;margin:5px 0;">{total_repudiations:,}</h2><span style="font-size:12px;color:#EF4444;font-weight:bold;">{100-base_approval_rate:.2f}% Rate</span></div>', unsafe_allow_html=True)
+with metric_col4:
+    avg_exposure = df['SUM_ASSURED'].mean() if 'SUM_ASSURED' in df.columns else 0
+    st.markdown(f'<div class="metric-card-wrapper" style="border-top-color:#F59E0B;"><p style="color:#64748B;font-size:14px;margin:0;">MEAN PORTFOLIO EXPOSURE</p><h2 style="color:#F59E0B;margin:5px 0;">₹{avg_exposure:,.0f}</h2></div>', unsafe_allow_html=True)
+
+# Generate Tab structures
+tab_descriptive, tab_diagnostic, tab_modeling, tab_findings = st.tabs([
+    "📊 Descriptive Cross-Tabs", 
+    "🎯 Diagnostic Bias Probing", 
+    "🧠 Super-Learning Classifiers", 
+    "📝 Automated Executive Briefing"
 ])
 
-# ================= TAB 1: DESCRIPTIVE ANALYTICS =================
-with tab1:
-    st.header("📋 Cross-Tabulation Analytics against Policy Status")
-    st.write("Cross-tabulating categorical attributes directly evaluates how policy frequencies shift across different application statuses.")
+# =======================================================================================
+# TAB 1: DESCRIPTIVE CROSS-TABS
+# =======================================================================================
+with tab_descriptive:
+    st.header("📊 Dynamic Cross-Tabulation Slices")
+    st.write("Examine proportional distributions across all fields against `POLICY_STATUS` to instantly detect anomalies in volume allocation.")
     
-    categorical_options = [col for col in ['PI_GENDER', 'ZONE', 'PAYMENT_MODE', 'EARLY_NON', 'MEDICAL_NONMED', 'PI_STATE'] if col in df.columns]
-    selected_cat = st.selectbox("Select Feature for Cross-Tabulation Analysis:", categorical_options)
+    available_categorical_slices = [c for c in ['PI_GENDER', 'ZONE', 'PAYMENT_MODE', 'EARLY_NON', 'MEDICAL_NONMED', 'PI_STATE', 'AGE_BINS', 'INCOME_UNDECLARED_FLAG'] if c in df.columns]
+    selected_target_slice = st.selectbox("Select Target Demography Slice Variable:", available_categorical_slices)
     
-    if selected_cat:
-        ct_count = pd.crosstab(df[selected_cat], df['POLICY_STATUS'])
-        ct_pct = pd.crosstab(df[selected_cat], df['POLICY_STATUS'], normalize='index') * 100
+    if selected_target_slice:
+        cross_tab_counts = pd.crosstab(df[selected_target_slice], df['POLICY_STATUS'])
+        cross_tab_normalized = pd.crosstab(df[selected_target_slice], df['POLICY_STATUS'], normalize='index') * 100
         
-        col_t1, col_t2 = st.columns([1, 1])
-        with col_t1:
-            st.subheader(f"Raw Headcount Cross-Tab: {selected_cat}")
-            st.dataframe(ct_count.style.background_gradient(cmap='Blues', axis=0))
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.markdown(f"#### Absolute Case Volume Breakdown: `{selected_target_slice}`")
+            st.dataframe(cross_tab_counts.style.background_gradient(cmap='Blues', axis=0))
+        with col_c2:
+            st.markdown(f"#### Proportional Allocation Breakdown: `% Within Category`")
+            st.dataframe(cross_tab_normalized.style.format("{:.2f}%").background_gradient(cmap='YlOrRd', axis=1))
             
-        with col_t2:
-            st.subheader(f"Percentage Allocation Cross-Tab (%)")
-            st.dataframe(ct_pct.style.format("{:.2f}%").background_gradient(cmap='YlOrRd', axis=1))
-            
-        st.subheader(f"Visualizing Claims Split across {selected_cat}")
-        fig_bar = px.bar(
+        st.markdown("#### Visual Distribution Analytics Plot")
+        fig_proportions = px.bar(
             df, 
-            x=selected_cat, 
+            x=selected_target_slice, 
             color='POLICY_STATUS',
             barmode='group',
-            color_discrete_sequence=['#10B981', '#EF4444'],
-            title=f"Distribution of Policy Status by {selected_cat}"
+            color_discrete_sequence=['#3B82F6', '#EF4444', '#10B981', '#F59E0B'],
+            title=f"Volumetric Case Split Distribution Across Class Variable: {selected_target_slice}"
         )
-        fig_bar.update_layout(xaxis={'categoryorder':'total descending'}, height=500)
-        st.plotly_chart(fig_bar, use_container_width=True)
+        fig_proportions.update_layout(xaxis={'categoryorder': 'total descending'}, template="plotly_white")
+        st.plotly_chart(fig_proportions, use_container_width=True)
 
-# ================= TAB 2: DIAGNOSTIC ANALYTICS =================
-with tab2:
-    st.header("🔍 Diagnostic Bias Probe: Deep Analysis")
+# =======================================================================================
+# TAB 2: DIAGNOSTIC BIAS PROBING (100% DYNAMIC GENERATION)
+# =======================================================================================
+with tab_diagnostic:
+    st.header("🎯 Systemic Bias Diagnostic Probe Engine")
+    st.write("Isolate variables dynamically to analyze operational patterns or deviations in adjudication outcomes.")
     
-    diag_selection = st.radio("Choose Target Focus for Bias Probe:", ["Age-Wise Bias", "Income-Wise Bias", "Team/Zone-Wise Bias"], horizontal=True)
+    probe_dimension = st.radio("Isolate Operational Evaluation Domain:", ["Age Profile Disparities", "Socio-Economic Income Gaps", "Team & Regional Branch Divergence"], horizontal=True)
     
-    if diag_selection == "Age-Wise Bias":
-        st.subheader("👨‍🦳 Age-Wise Bias Inspection")
-        df['AGE_GROUP'] = pd.cut(df['PI_AGE'], bins=[0, 30, 45, 60, 75, 100], labels=['<30', '30-45', '45-60', '60-75', '>75'])
+    if probe_dimension == "Age Profile Disparities" and 'PI_AGE' in df.columns:
+        st.subheader("Inspection: Age Demographic Profile Gaps")
+        col_a1, col_a2 = st.columns(2)
         
-        col_a1, col_a2 = st.columns([1, 1])
         with col_a1:
             fig_age_box = px.box(df, x='POLICY_STATUS', y='PI_AGE', color='POLICY_STATUS',
-                                 color_discrete_sequence=['#10B981', '#EF4444'], points="all", title="Age Distribution vs Policy Status")
+                                 color_discrete_sequence=['#3B82F6', '#EF4444'], points="outer", title="Structural Age Distortions vs Claim Resolution")
+            fig_age_box.update_layout(template="plotly_white")
             st.plotly_chart(fig_age_box, use_container_width=True)
         with col_a2:
-            age_ct = pd.crosstab(df['AGE_GROUP'], df['POLICY_STATUS'], normalize='index') * 100
-            fig_age_bar = px.bar(age_ct.reset_index(), x='AGE_GROUP', y=age_ct.columns.tolist(),
-                                 title="Approval/Repudiation Rate by Age Brackets (%)", color_discrete_sequence=['#10B981', '#EF4444'])
+            age_ct_pct = pd.crosstab(df['AGE_BINS'], df['POLICY_STATUS'], normalize='index') * 100
+            fig_age_bar = px.bar(age_ct_pct.reset_index(), x='AGE_BINS', y=age_ct_pct.columns.tolist(),
+                                 title="Adjudication Track Realization Slices Across Age Brackets (%)", barmode='stack',
+                                 color_discrete_sequence=['#3B82F6', '#EF4444'])
+            fig_age_bar.update_layout(template="plotly_white")
             st.plotly_chart(fig_age_bar, use_container_width=True)
             
-        under_30_app = age_ct.loc['<30', 'Approved Death Claim'] if '<30' in age_ct.index and 'Approved Death Claim' in age_ct.columns else 0
-        over_60_app = age_ct.loc['60-75', 'Approved Death Claim'] if '60-75' in age_ct.index and 'Approved Death Claim' in age_ct.columns else 0
+        # DYNAMIC TEXT EXTRACTION
+        max_rep_age_cohort = age_ct_pct.index[0]
+        max_rep_age_val = 0
+        all_rep_cols = [c for c in age_ct_pct.columns if 'REPUD' in str(c) or 'DENI' in str(c) or 'REJ' in str(c)]
+        target_rep_col = all_rep_cols[0] if all_rep_cols else age_ct_pct.columns[-1]
+        
+        for idx in age_ct_pct.index:
+            if age_ct_pct.loc[idx, target_rep_col] > max_rep_age_val:
+                max_rep_age_val = age_ct_pct.loc[idx, target_rep_col]
+                max_rep_age_cohort = idx
+                
         st.markdown(f"""
-            <div class="bias-alert">
-            <strong>Dynamic Age Insight:</strong> Policyholders under the age of 30 currently experience an approval rate of <b>{under_30_app:.1f}%</b>, 
-            compared to older cohorts (60-75) sitting at an approval rate of <b>{over_60_app:.1f}%</b>.
+            <div class="anomaly-alert-card">
+                <h4>⚠️ Automated Age Distortion Diagnostic:</h4>
+                <p>Systemic tracking algorithms have isolated maximum friction inside the <b>{max_rep_age_cohort}</b> bracket, 
+                yielding an active repudiation index velocity of <b>{max_rep_age_val:.2f}%</b>. This deviation requires case-file review 
+                to see if older or younger cohorts face unequal hurdles during document validation.</p>
             </div>
         """, unsafe_allow_html=True)
         
-    elif diag_selection == "Income-Wise Bias":
-        st.subheader("💰 Income-Wise Bias Inspection")
+    elif probe_dimension == "Socio-Economic Income Gaps" and 'PI_ANNUAL_INCOME' in df.columns:
+        st.subheader("Inspection: Socio-Economic Income Profiling")
+        col_i1, col_i2 = st.columns(2)
         
-        mean_inc_approved = df[df['POLICY_STATUS'] == 'Approved Death Claim']['PI_ANNUAL_INCOME'].mean()
-        mean_inc_repudiated = df[df['POLICY_STATUS'] == 'Repudiate Death']['PI_ANNUAL_INCOME'].mean()
+        mean_financials = df.groupby('POLICY_STATUS')['PI_ANNUAL_INCOME'].mean().reset_index()
+        approved_mean_val = mean_financials[mean_financials['POLICY_STATUS'] == primary_approved_str]['PI_ANNUAL_INCOME'].values[0] if primary_approved_str in mean_financials['POLICY_STATUS'].values else 1
+        repudiated_mean_val = df[df['POLICY_STATUS'] != primary_approved_str]['PI_ANNUAL_INCOME'].mean() if len(df[df['POLICY_STATUS'] != primary_approved_str]) > 0 else 1
+        income_disparity_multiple = approved_mean_val / repudiated_mean_val if repudiated_mean_val > 0 else 1
         
-        col_i1, col_i2 = st.columns([1, 1])
         with col_i1:
-            avg_income = df.groupby('POLICY_STATUS')['PI_ANNUAL_INCOME'].mean().reset_index()
-            fig_inc_bar = px.bar(avg_income, x='POLICY_STATUS', y='PI_ANNUAL_INCOME', color='POLICY_STATUS',
-                                 color_discrete_sequence=['#3B82F6', '#F59E0B'], title="Mean Annual Income by Claim Outcome")
+            fig_inc_bar = px.bar(mean_financials, x='POLICY_STATUS', y='PI_ANNUAL_INCOME', color='POLICY_STATUS',
+                                 color_discrete_sequence=['#10B981', '#EF4444'], title="Portfolio Average Annual Wealth Levels by Ultimate Claim Resolution State")
+            fig_inc_bar.update_layout(template="plotly_white")
             st.plotly_chart(fig_inc_bar, use_container_width=True)
         with col_i2:
-            df['HAS_REPORTED_INCOME'] = np.where(df['PI_ANNUAL_INCOME'] == 0, '0 / Unreported', 'Positive Income')
-            inc_ct = pd.crosstab(df['HAS_REPORTED_INCOME'], df['POLICY_STATUS'], normalize='index') * 100
-            fig_reported = px.bar(inc_ct.reset_index(), x='HAS_REPORTED_INCOME', y=inc_ct.columns.tolist(),
-                                 title="Impact of Unreported/Zero Income Records (%)", color_discrete_sequence=['#10B981', '#EF4444'], barmode='group')
-            st.plotly_chart(fig_reported, use_container_width=True)
+            income_unreported_crosstab = pd.crosstab(df['INCOME_UNDECLARED_FLAG'], df['POLICY_STATUS'], normalize='index') * 100
+            fig_unreported = px.bar(income_unreported_crosstab.reset_index(), x='INCOME_UNDECLARED_FLAG', y=income_unreported_crosstab.columns.tolist(),
+                                    title="Resolution Risk Velocity Contingent on Non-Disclosure of Income (%)", barmode='group',
+                                    color_discrete_sequence=['#3B82F6', '#EF4444'])
+            fig_unreported.update_layout(template="plotly_white")
+            st.plotly_chart(fig_unreported, use_container_width=True)
             
         st.markdown(f"""
-            <div class="bias-alert">
-            <strong>Dynamic Income Insight:</strong> The dataset reveals that approved claims have an average income profile of <b>₹{mean_inc_approved:,.2f}</b>, 
-            while rejected/repudiated claims show a significantly lower profile of <b>₹{mean_inc_repudiated:,.2f}</b>.
+            <div class="anomaly-alert-card">
+                <h4>⚠️ Automated Wealth Concentration Diagnostic:</h4>
+                <p>The statistical mean wealth factor for a safe tracking outcome stands at <b>₹{approved_mean_val:,.2f}</b>, 
+                whereas the dropped/rejected class registers a mean parameter signature of <b>₹{repudiated_mean_val:,.2f}</b>. 
+                Approved individuals have a wealth factor signature roughly <b>{income_disparity_multiple:.2f}x</b> larger than rejected individuals. 
+                This strongly suggests lower-income applicants face greater verification hurdles.</p>
             </div>
         """, unsafe_allow_html=True)
         
-    elif diag_selection == "Team/Zone-Wise Bias":
-        st.subheader("🚩 Office Team & Zone Performance Disparities")
-        zone_summary = pd.crosstab(df['ZONE'], df['POLICY_STATUS'], normalize='index') * 100
-        if 'Repudiate Death' in zone_summary.columns:
-            zone_summary = zone_summary.sort_values(by='Repudiate Death', ascending=False).reset_index()
-        else:
-            zone_summary = zone_summary.reset_index()
+    elif probe_dimension == "Team & Regional Branch Divergence" and 'ZONE' in df.columns:
+        st.subheader("Inspection: Regional Performance Disparities")
+        zone_ct_pct = pd.crosstab(df['ZONE'], df['POLICY_STATUS'], normalize='index') * 100
         
-        fig_zone = px.bar(zone_summary, x='ZONE', y=zone_summary.columns.tolist()[1:], 
-                          title="Claim Settlement Behaviors Across Teams & Zones (%)", color_discrete_sequence=['#10B981', '#EF4444'], height=600)
+        all_rep_cols = [c for c in zone_ct_pct.columns if 'REPUD' in str(c) or 'DENI' in str(c) or 'REJ' in str(c)]
+        target_rep_col = all_rep_cols[0] if all_rep_cols else zone_ct_pct.columns[-1]
+        
+        zone_ct_pct_sorted = zone_ct_pct.sort_values(by=target_rep_col, ascending=False)
+        
+        fig_zone = px.bar(zone_ct_pct_sorted.reset_index(), x='ZONE', y=zone_ct_pct_sorted.columns.tolist(),
+                          title="Systemic Adjudication Behavior Divergence by Active Regional Office Tracking Nodes (%)", barmode='stack',
+                          color_discrete_sequence=['#3B82F6', '#EF4444', '#10B981'], height=550)
+        fig_zone.update_layout(template="plotly_white")
         st.plotly_chart(fig_zone, use_container_width=True)
         
-        highest_rep_zone = zone_summary.iloc[0]['ZONE']
-        highest_rep_val = zone_summary.iloc[0]['Repudiate Death'] if 'Repudiate Death' in zone_summary.columns else 0
+        highest_friction_branch = zone_ct_pct_sorted.index[0]
+        highest_friction_value = zone_ct_pct_sorted[target_rep_col].iloc[0]
+        lowest_friction_branch = zone_ct_pct_sorted.index[-1]
+        lowest_friction_value = zone_ct_pct_sorted[target_rep_col].iloc[-1]
+        
         st.markdown(f"""
-            <div class="bias-alert">
-            <strong>Dynamic Zone Insight:</strong> High operational variance detected between regions. The team operating in <b>{highest_rep_zone}</b> 
-            presents the most aggressive stance with a <b>{highest_rep_val:.1f}% claim repudiation rate</b>.
+            <div class="anomaly-alert-card">
+                <h4>⚠️ Automated Regional Variance Diagnostic:</h4>
+                <p>Severe localization variance detected between corporate operating sites. The team node matching <b>{highest_friction_branch}</b> 
+                exhibits an aggressive repudiation posture at <b>{highest_friction_value:.2f}%</b>, whereas the branch operating at 
+                <b>{lowest_friction_branch}</b> tracks a low repudiation baseline of just <b>{lowest_friction_value:.2f}%</b>. This performance gap indicates 
+                that claims processing rules may be inconsistent across regional offices.</p>
             </div>
         """, unsafe_allow_html=True)
 
-# ================= TAB 3: MACHINE LEARNING & FEATURE ENGINEERING =================
+# ---------------------------------------------------------------------------------------
+# V. AUTO-TUNED GLOBAL SESSION MACHINE LEARNING CONSTRUCTS
+# ---------------------------------------------------------------------------------------
+if 'dynamic_ml_memory' not in st.session_state:
+    st.session_state.dynamic_ml_memory = None
+
+# =======================================================================================
+# TAB 3: SUPER-LEARNING CLASSIFIERS
+# =======================================================================================
 with tab3:
-    st.header("🤖 Machine Learning Super-Classifiers & Feature Engineering")
+    st.header("🧠 Automated Advanced Prediction & Super-Learning Classifiers")
+    st.write("Trigger automated high-performance pipelines to engineer features, correct structural skew, and train machine learning models.")
     
-    if st.button("🚀 Execute Data Training & Evaluate Algorithms", type="primary"):
-        with st.spinner("Engineering features and training super-learning algorithms..."):
+    test_split_ratio = st.slider("Validation Holdout Size Selection (% Split Layer)", 10, 50, 30) / 100.0
+    
+    if st.button("🚀 Run Feature Pipelines & Benchmark Super-Classifiers", type="primary"):
+        with st.spinner("Executing transformations, optimizing arrays, and evaluating baseline performance..."):
             
-            df_ml = df.copy()
-            df_ml['INCOME_TO_SUM_ASSURED'] = df_ml['PI_ANNUAL_INCOME'] / (df_ml['SUM_ASSURED'] + 1)
-            df_ml['AGE_GROUP'] = pd.cut(df_ml['PI_AGE'], bins=[0, 30, 45, 60, 75, 100], labels=['<30', '30-45', '45-60', '60-75', '>75']).astype(str)
+            # Recompute transformations safely on clean data arrays
+            ml_base_df = df.copy()
             
-            drop_cols = [c for c in ['POLICY_NO', 'PI_NAME'] if c in df_ml.columns]
-            df_ml = df_ml.drop(columns=drop_cols)
+            # Remove direct keys or primary indicators to protect generalization layers
+            unwanted_leakage_keys = ['POLICY_NO', 'PI_NAME', 'AGE_BINS', 'INCOME_UNDECLARED_FLAG']
+            existing_drop_keys = [k for k in unwanted_leakage_keys if k in ml_base_df.columns]
+            ml_base_df = ml_base_df.drop(columns=existing_drop_keys)
             
-            le_target = LabelEncoder()
-            df_ml['POLICY_STATUS'] = le_target.fit_transform(df_ml['POLICY_STATUS'].astype(str))
+            # Define explicit target mappings
+            target_label_encoder = LabelEncoder()
+            ml_base_df['POLICY_STATUS'] = target_label_encoder.fit_transform(ml_base_df['POLICY_STATUS'].astype(str))
             
-            X = df_ml.drop(columns=['POLICY_STATUS'])
-            y = df_ml['POLICY_STATUS']
+            # Track target identification array indexes
+            positive_class_index = 1 
             
-            cat_cols = X.select_dtypes(include=['object', 'category']).columns
-            for col in cat_cols:
-                le = LabelEncoder()
-                X[col] = le.fit_transform(X[col].astype(str))
-                
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+            X_array = ml_base_df.drop(columns=['POLICY_STATUS'])
+            y_array = ml_base_df['POLICY_STATUS']
             
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            X_test_scaled = scaler.transform(X_test)
+            # Separate numeric and categorical pipelines
+            numeric_features = X_array.select_dtypes(include=['int64', 'float64']).columns.tolist()
+            categorical_features = X_array.select_dtypes(include=['object', 'category']).columns.tolist()
             
-            models = {
-                'KNN': KNeighborsClassifier(n_neighbors=7),
-                'Decision Tree': DecisionTreeClassifier(random_state=42, max_depth=5),
-                'Random Forest': RandomForestClassifier(random_state=42, n_estimators=100, max_depth=8),
-                'Gradient Boosting': GradientBoostingClassifier(random_state=42, n_estimators=100, learning_rate=0.1)
+            # Construct standard pipeline components
+            numeric_transformer = Pipeline(steps=[
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler())
+            ])
+            
+            categorical_transformer = Pipeline(steps=[
+                ('imputer', SimpleImputer(strategy='constant', fill_value='UNKNOWN_VAL')),
+                ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+            ])
+            
+            preprocessor_pipeline = ColumnTransformer(transformers=[
+                ('num', numeric_transformer, numeric_features),
+                ('cat', categorical_transformer, categorical_features)
+            ])
+            
+            # Split array entries securely
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_array, y_array, 
+                test_size=test_split_ratio, 
+                random_state=42, 
+                stratify=y_array if y_array.nunique() > 1 else None
+            )
+            
+            # Process transformations
+            X_train_processed = preprocessor_pipeline.fit_transform(X_train)
+            X_test_processed = preprocessor_pipeline.transform(X_test)
+            
+            # Configure algorithms with robust hyperparameters
+            algorithm_ledger = {
+                'K-Nearest Neighbors (KNN)': KNeighborsClassifier(n_neighbors=7, weights='distance'),
+                'Optimized Decision Tree': DecisionTreeClassifier(random_state=42, max_depth=6, class_weight='balanced'),
+                'Balanced Random Forest': RandomForestClassifier(random_state=42, n_estimators=150, max_depth=10, class_weight='balanced', n_jobs=-1),
+                'Gradient Boosting Machine': GradientBoostingClassifier(random_state=42, n_estimators=120, learning_rate=0.08, max_depth=4)
             }
             
-            metrics_list = []
-            roc_curves = {}
-            confusion_matrices = {}
+            performance_metrics_store = []
+            roc_curve_plotting_store = {}
+            confusion_matrix_plotting_store = {}
             
-            for name, model in models.items():
-                X_tr = X_train_scaled if name == 'KNN' else X_train
-                X_te = X_test_scaled if name == 'KNN' else X_test
+            for model_name, classifier_instance in algorithm_ledger.items():
+                # Fit model
+                classifier_instance.fit(X_train_processed, y_train)
                 
-                model.fit(X_tr, y_train)
-                y_pred_tr = model.predict(X_tr)
-                y_pred_te = model.predict(X_te)
+                # Predict
+                train_predictions = classifier_instance.predict(X_train_processed)
+                test_predictions = classifier_instance.predict(X_test_processed)
                 
-                if hasattr(model, "predict_proba"):
-                    y_prob = model.predict_proba(X_te)[:, 1]
+                if hasattr(classifier_instance, "predict_proba"):
+                    test_probabilities = classifier_instance.predict_proba(X_test_processed)[:, 1]
                 else:
-                    y_prob = model.decision_function(X_te)
+                    test_probabilities = classifier_instance.decision_function(X_test_processed)
                 
-                tr_acc = accuracy_score(y_train, y_pred_tr)
-                te_acc = accuracy_score(y_test, y_pred_te)
-                precision = precision_score(y_test, y_pred_te, zero_division=0)
-                recall = recall_score(y_test, y_pred_te, zero_division=0)
-                f1 = f1_score(y_test, y_pred_te, zero_division=0)
+                # Metrics Calculation
+                score_train_acc = accuracy_score(y_train, train_predictions)
+                score_test_acc = accuracy_score(y_test, test_predictions)
+                score_precision = precision_score(y_test, test_predictions, zero_division=0)
+                score_recall = recall_score(y_test, test_predictions, zero_division=0)
+                score_f1 = f1_score(y_test, test_predictions, zero_division=0)
                 
-                metrics_list.append({
-                    'Model': name, 'Train Accuracy': tr_acc, 'Test Accuracy': te_acc,
-                    'Precision': precision, 'Recall': recall, 'F1 Score': f1
+                performance_metrics_store.append({
+                    'Model Configuration': model_name,
+                    'Train Accuracy': score_train_acc,
+                    'Test Accuracy': score_test_acc,
+                    'Precision': score_precision,
+                    'Recall': score_recall,
+                    'F1-Score': score_f1
                 })
                 
-                fpr, tpr, _ = roc_curve(y_test, y_prob)
-                roc_curves[name] = (fpr, tpr, auc(fpr, tpr))
-                confusion_matrices[name] = confusion_matrix(y_test, y_pred_te)
+                # ROC Performance Metrics Mapping
+                false_positive_rate, true_positive_rate, _ = roc_curve(y_test, test_probabilities)
+                roc_curve_plotting_store[model_name] = (false_positive_rate, true_positive_rate, auc(false_positive_rate, true_positive_rate))
                 
-            res_df = pd.DataFrame(metrics_list)
+                # Confusion Matrix Mapping
+                confusion_matrix_plotting_store[model_name] = confusion_matrix(y_test, test_predictions)
+                
+            metrics_dataframe = pd.DataFrame(performance_metrics_store)
             
-            st.session_state.ml_results = {
-                'df': res_df, 'roc': roc_curves, 'cm': confusion_matrices, 'classes': le_target.classes_
+            # Save metrics to Session State to maintain continuity
+            st.session_state.dynamic_ml_memory = {
+                'metrics_table': metrics_dataframe,
+                'roc_data': roc_curve_plotting_store,
+                'matrix_data': confusion_matrix_plotting_store,
+                'class_labels': target_label_encoder.classes_.tolist()
             }
             
-        st.subheader("📈 Algorithm Performance Comparison Matrix")
-        st.dataframe(res_df.style.format({
+    # Render ML results if cached in Memory
+    if st.session_state.dynamic_ml_memory is not None:
+        saved_ml = st.session_state.dynamic_ml_memory
+        
+        st.subheader("📊 Comparative Algorithm Performance Matrix")
+        st.dataframe(saved_ml['metrics_table'].style.format({
             'Train Accuracy': "{:.2%}", 'Test Accuracy': "{:.2%}",
-            'Precision': "{:.2%}", 'Recall': "{:.2%}", 'F1 Score': "{:.2%}"
+            'Precision': "{:.2%}", 'Recall': "{:.2%}", 'F1-Score': "{:.2%}"
         }).background_gradient(cmap='Blues'))
         
-        col_m1, col_m2 = st.columns([1, 1])
-        with col_m1:
-            st.markdown("#### 🔄 Receiver Operating Characteristic (ROC) Curves")
-            fig_roc = go.Figure()
-            for name, (fpr, tpr, roc_auc) in roc_curves.items():
-                fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'{name} (AUC = {roc_auc:.2f})'))
-            fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', line=dict(dash='dash', color='grey'), name='Random Guess'))
-            fig_roc.update_layout(title="ROC Curve Model Stability Comparison", xaxis_title="False Positive Rate", yaxis_title="True Positive Rate", height=500)
-            st.plotly_chart(fig_roc, use_container_width=True)
+        # Melt dataframe to generate dynamic visualizations
+        melted_metrics = saved_ml['metrics_table'].melt(id_vars='Model Configuration', var_name='Performance Metric', value_name='Score Summary')
+        fig_comparative_metrics = px.bar(
+            melted_metrics, 
+            x='Model Configuration', 
+            y='Score Summary', 
+            color='Performance Metric', 
+            barmode='group',
+            title="Parallel Algorithm Performance Comparison Benchmarks",
+            color_discrete_sequence=px.colors.qualitative.Bold,
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_comparative_metrics, use_container_width=True)
+        
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            st.markdown("#### 🔄 Receiver Operating Characteristic (ROC) Space Curves")
+            fig_roc_space = go.Figure()
+            for name, (fpr, tpr, roc_auc_val) in saved_ml['roc_data'].items():
+                fig_roc_space.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f"{name} (AUC = {roc_auc_val:.3f})"))
+            fig_roc_space.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', line=dict(dash='dash', color='darkgrey'), name='Random Anchor Base'))
+            fig_roc_space.update_layout(xaxis_title="False Positive Rate", yaxis_title="True Positive Rate", template="plotly_white", height=500)
+            st.plotly_chart(fig_roc_space, use_container_width=True)
             
-        with col_m2:
-            st.markdown("#### 🧩 Confusion Matrices Grid")
-            fig_cm, axes = plt.subplots(2, 2, figsize=(10, 8))
-            axes = axes.ravel()
-            for idx, (name, cm) in enumerate(confusion_matrices.items()):
-                sns.heatmap(cm, annot=True, fmt='d', ax=axes[idx], cmap='Purples', xticklabels=le_target.classes_, yticklabels=le_target.classes_)
-                axes[idx].set_title(f'{name} Matrix')
+        with col_v2:
+            st.markdown("#### 🧩 Confusion Matrices Evaluation Matrix")
+            fig_plt_cm, axes_grid = plt.subplots(2, 2, figsize=(10, 8))
+            axes_grid = axes_grid.ravel()
+            
+            for idx_pointer, (name, cm_matrix) in enumerate(saved_ml['matrix_data'].items()):
+                sns.heatmap(cm_matrix, annot=True, fmt='d', ax=axes_grid[idx_pointer], cmap='Blues',
+                            xticklabels=saved_ml['class_labels'], yticklabels=saved_ml['class_labels'], cbar=False)
+                axes_grid[idx_pointer].set_title(name, fontsize=10, fontweight='bold')
+                axes_grid[idx_pointer].set_xlabel('Predicted Label', fontsize=8)
+                axes_grid[idx_pointer].set_ylabel('True Label', fontsize=8)
             plt.tight_layout()
-            st.pyplot(fig_cm)
+            st.pyplot(fig_plt_cm)
+    else:
+        st.info("💡 Click the button above to execute feature engineering pipelines and train the classifiers.")
 
-# ================= TAB 4: EXECUTIVE FINDINGS =================
+# =======================================================================================
+# TAB 4: EXECUTIVE FINDINGS & ACTIONS (100% COMPLETELY DYNAMIC TEXT ENGINE)
+# =======================================================================================
 with tab4:
-    st.header("💡 Summary Executive Findings & Strategic Recommendations")
+    st.header("📝 Automated Strategic Briefing & Action Register")
+    st.write("This briefing is generated dynamically from the active data matrix and model runs to provide leadership with actionable insights.")
     
-    df['AGE_GROUP'] = pd.cut(df['PI_AGE'], bins=[0, 30, 45, 60, 75, 100], labels=['<30', '30-45', '45-60', '60-75', '>75'])
-    age_ct_live = pd.crosstab(df['AGE_GROUP'], df['POLICY_STATUS'], normalize='index') * 100
-    zone_ct_live = pd.crosstab(df['ZONE'], df['POLICY_STATUS'], normalize='index') * 100
-    med_ct_live = pd.crosstab(df['MEDICAL_NONMED'], df['POLICY_STATUS'], normalize='index') * 100
-    
-    mean_inc_app = df[df['POLICY_STATUS'] == 'Approved Death Claim']['PI_ANNUAL_INCOME'].mean()
-    mean_inc_rep = df[df['POLICY_STATUS'] == 'Repudiate Death']['PI_ANNUAL_INCOME'].mean()
-    
-    st.subheader("📌 Identified Operational Disparities (Calculated from Current File)")
-    
-    if 'Repudiate Death' in zone_ct_live.columns and len(zone_ct_live) > 0:
-        worst_zone = zone_ct_live.sort_values(by='Repudiate Death', ascending=False).index[0]
-        worst_zone_val = zone_ct_live.sort_values(by='Repudiate Death', ascending=False)['Repudiate Death'].iloc[0]
-        st.markdown(f"**1. Regional Variance Risk:** Extreme variance identified in claim handling across groups. The zone operating under **{worst_zone}** exhibits the highest rejection footprint, showing a **{worst_zone_val:.2f}% repudiation rate**.")
+    # Run structural descriptive statistics to back written briefs dynamically
+    if 'AGE_BINS' in df.columns:
+        dynamic_age_crosstab = pd.crosstab(df['AGE_BINS'], df['POLICY_STATUS'], normalize='index') * 100
+        all_rep_cols = [c for c in dynamic_age_crosstab.columns if 'REPUD' in str(c) or 'DENI' in str(c) or 'REJ' in str(c)]
+        target_rep_col = all_rep_cols[0] if all_rep_cols else dynamic_age_crosstab.columns[-1]
+        highest_age_anomaly = dynamic_age_crosstab.sort_values(by=target_rep_col, ascending=False).index[0]
+        highest_age_anomaly_rate = dynamic_age_crosstab.sort_values(by=target_rep_col, ascending=False)[target_rep_col].iloc[0]
     else:
-        st.markdown("**1. Regional Variance Risk:** Insufficient repudiation variance in current data entries to extract dynamic regional alerts.")
+        highest_age_anomaly, highest_age_anomaly_rate = "UNKNOWN", 0
         
-    st.markdown(f"**2. Socio-Economic Income Filter:** Approved claims maintain a mean annual income profile of **Hex-Value Formatted: ₹{mean_inc_app:,.2f}**, whereas rejected/repudiated records carry an average profile of **₹{mean_inc_rep:,.2f}**. Lower income accounts face a significantly higher statistical rate of rejection.")
-    
-    if 'MEDICAL' in med_ct_live.index and 'Approved Death Claim' in med_ct_live.columns:
-        med_app_rate = med_ct_live.loc['MEDICAL', 'Approved Death Claim']
-        non_med_app_rate = med_ct_live.loc['NON MEDICAL', 'Approved Death Claim'] if 'NON MEDICAL' in med_ct_live.index else 0
-        st.markdown(f"**3. Underwriting Validation Disparity:** Policies processed with Medical Underwriting have an approval rate of **{med_app_rate:.2f}%**, while Non-Medical configurations drop to an approval rating of **{non_med_app_rate:.2f}%**.")
-        
-    st.subheader("🤖 Algorithmic Audit Summary")
-    if st.session_state.ml_results is not None:
-        res_df_saved = st.session_state.ml_results['df']
-        best_model_row = res_df_saved.sort_values(by='Test Accuracy', ascending=False).iloc[0]
-        st.info(f"**Active Model Insight:** According to the latest training run, the **{best_model_row['Model']}** model delivers the highest validation precision and capability, reaching a Test Accuracy of **{best_model_row['Test Accuracy']:.2%}** and an F1-Score of **{best_model_row['F1 Score']:.2%}**.")
+    if 'ZONE' in df.columns:
+        dynamic_zone_crosstab = pd.crosstab(df['ZONE'], df['POLICY_STATUS'], normalize='index') * 100
+        all_rep_cols = [c for c in dynamic_zone_crosstab.columns if 'REPUD' in str(c) or 'DENI' in str(c) or 'REJ' in str(c)]
+        target_rep_col = all_rep_cols[0] if all_rep_cols else dynamic_zone_crosstab.columns[-1]
+        highest_zone_anomaly = dynamic_zone_crosstab.sort_values(by=target_rep_col, ascending=False).index[0]
+        highest_zone_anomaly_rate = dynamic_zone_crosstab.sort_values(by=target_rep_col, ascending=False)[target_rep_col].iloc[0]
     else:
-        st.warning("⚠️ Run the Machine Learning pipelines under the 'Super-Learning ML Models' tab to see dynamic algorithmic insights here.")
+        highest_zone_anomaly, highest_zone_anomaly_rate = "UNKNOWN", 0
 
-    st.subheader("🛠完整 Operational Action Plan Recommendations")
+    mean_income_approved_calc = df[df['POLICY_STATUS'] == primary_approved_str]['PI_ANNUAL_INCOME'].mean() if 'PI_ANNUAL_INCOME' in df.columns else 0
+    mean_income_repudiated_calc = df[df['POLICY_STATUS'] != primary_approved_str]['PI_ANNUAL_INCOME'].mean() if 'PI_ANNUAL_INCOME' in df.columns and len(df[df['POLICY_STATUS'] != primary_approved_str]) > 0 else 0
+
+    st.markdown('<div class="insight-card">', unsafe_allow_html=True)
+    st.subheader("📌 Active Operational Insights Summary")
+    
+    st.markdown(f"""
+    - **Regional Process Disparities:** The data reveals that claims processing results vary significantly by region. 
+      The group operating under **{highest_zone_anomaly}** exhibits the highest rejection footprint, showing a **{highest_zone_anomaly_rate:.2f}% repudiation rate**. 
+      This wide regional gap indicates that localized underwriting teams may be applying different evaluation standards.
+    - **Socio-Economic Income Gaps:** Approved claims carry a mean annual income profile of **₹{mean_income_approved_calc:,.2f}**, 
+      while rejected accounts show an average profile of **₹{mean_income_repudiated_calc:,.2f}**. 
+      This trend indicates that lower-income policyholders face higher friction during the claim settlement process.
+    - **Age-Based Risk Variances:** Systemic monitoring algorithms have flagged maximum friction within the **{highest_age_anomaly}** cohort, 
+      where the repudiation rate reaches **{highest_age_anomaly_rate:.2f}%**. This variance highlights the need to ensure that young or elderly policyholders are evaluated under equal criteria.
+    """)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.subheader("🤖 Algorithmic System Audit")
+    if st.session_state.dynamic_ml_memory is not None:
+        saved_metrics_brief = st.session_state.dynamic_ml_memory['metrics_table']
+        champion_model_row = saved_metrics_brief.sort_values(by='Test Accuracy', ascending=False).iloc[0]
+        
+        st.info(f"🚀 **Model Audit Finding:** Based on the latest evaluation run, the **{champion_model_row['Model Configuration']}** algorithm is the top-performing model, achieving a validation accuracy of **{champion_model_row['Test Accuracy']:.2%}** and an F1-Score of **{champion_model_row['F1-Score']:.2%}**. Its high predictive capacity suggests that claim outcomes follow highly consistent data patterns rather than purely random variations.")
+    else:
+        st.warning("⚠️ Run the predictive workflows under the 'Super-Learning Classifiers' tab to populate this section with real-time model metrics.")
+
+    st.subheader("🛠️ Strategic Action Plan for Leadership")
     st.markdown("""
-    * **Enforce Centralized Rulesets**: Enforce structured screening policies across regional hubs to normalize localized evaluation variances.
-    * **Review Downstream Screening Filters**: Re-evaluate documentation procedures on non-medical applications to stop verification friction from flowing downstream to the claim settlement stage.
-    * **Deploy Algorithmic Gatekeepers**: Use the best-performing super-learning algorithm to flag claim rejections that show high probabilities of structural bias for secondary manual audits.
+    1. **Standardize Adjudication Rules:** Implement centralized verification workflows to eliminate the localized process differences observed in high-rejection regions.
+    2. **Refine Non-Medical Underwriting Filters:** Review and update screening criteria for non-medical policies to prevent verification friction from causing downstream rejections at the claim stage.
+    3. **Deploy Automated Quality Audits:** Use the top-performing super-learning model as a secondary quality check to automatically flag high-risk claim rejections for independent manual review.
     """)
