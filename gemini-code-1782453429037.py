@@ -5,7 +5,7 @@
 Features: 
 - 100% Fully Dynamic Insights & Text Analytics (No Hardcoded Verbiage)
 - Robust Automated Column Mapping to support any Database schema flexibly
-- Plotly Exception fix implemented safely (points="outliers")
+- Full NameError Resolution across all Tab containers
 - Advanced ML Engineering Pipelines with Distance vs Tree Scaler Isolations
 """
 
@@ -106,9 +106,6 @@ def automatically_map_columns(columns):
         'MEDICAL_NONMED': None
     }
     
-    cols_upper = [str(c).upper() for c in columns]
-    
-    # Priority matching lookups
     for c_raw in columns:
         c = str(c_raw).upper()
         if 'STATUS' in c:
@@ -124,10 +121,10 @@ def automatically_map_columns(columns):
         elif 'MEDICAL' in c or 'MED' in c:
             mapping['MEDICAL_NONMED'] = c_raw
 
-    # Fallbacks if strict pattern fails
+    # Fallbacks if strict pattern match yields nothing
     if not mapping['POLICY_STATUS']: mapping['POLICY_STATUS'] = columns[-1]
     if not mapping['PI_AGE']: 
-        numeric_cols = [c for c in columns if 'int' in str(columns.dtype) or 'float' in str(columns.dtype)]
+        numeric_cols = [c for c in columns if 'int' in str(df[c].dtype) or 'float' in str(df[c].dtype)] if 'df' in locals() else []
         if numeric_cols: mapping['PI_AGE'] = numeric_cols[0]
         
     return mapping
@@ -148,7 +145,7 @@ def process_and_clean_claims_data(file_source, tail_cardinality_threshold=12):
     working_df = raw_data.copy()
     col_map = automatically_map_columns(working_df.columns)
     
-    # Clean parsed numeric matrices
+    # Clean numeric structures
     for key in ['SUM_ASSURED', 'PI_ANNUAL_INCOME', 'PI_AGE']:
         actual_col = col_map[key]
         if actual_col and actual_col in working_df.columns:
@@ -160,14 +157,14 @@ def process_and_clean_claims_data(file_source, tail_cardinality_threshold=12):
         if actual_col not in [col_map['PI_AGE'], col_map['PI_ANNUAL_INCOME'], col_map['SUM_ASSURED']]:
             working_df[actual_col] = working_df[actual_col].fillna('UNKNOWN').astype(str).str.strip().str.upper()
 
-    # Collapse long-tail configurations to mitigate structural overfitting
+    # Collapse high-cardinality long tails to limit systemic overfitting
     for key in ['ZONE']:
         actual_col = col_map[key]
         if actual_col and actual_col in working_df.columns:
             top_categories = working_df[actual_col].value_counts().index[:tail_cardinality_threshold]
             working_df[actual_col] = np.where(working_df[actual_col].isin(top_categories), working_df[actual_col], 'OTHER_GROUP')
             
-    # Synthesize interactive variables dynamically
+    # Synthesize interaction vectors dynamically
     age_col = col_map['PI_AGE']
     if age_col and age_col in working_df.columns:
         working_df['DYNAMIC_AGE_BINS'] = pd.cut(
@@ -185,7 +182,7 @@ def process_and_clean_claims_data(file_source, tail_cardinality_threshold=12):
     return working_df, col_map
 
 # ---------------------------------------------------------------------------------------
-# IV. SIDEBAR CONTROLS & LOAD ENGINE
+# IV. SIDEBAR CONTROLS & DATA EXTRACTION
 # ---------------------------------------------------------------------------------------
 st.sidebar.markdown("### 🛠️ Configuration Controls")
 uploaded_dataset = st.sidebar.file_uploader("Upload Core Claims Ledger (CSV Format)", type=["csv"])
@@ -200,7 +197,7 @@ if df is None:
     st.error("❌ Essential context ledger missing! Please upload a valid claims schema layout file via the dashboard sidebar configuration container.")
     st.stop()
 
-# Unpack resolved schema targets
+# Assign mapped target entities
 tgt_col = c_map['POLICY_STATUS']
 age_col = c_map['PI_AGE']
 inc_col = c_map['PI_ANNUAL_INCOME']
@@ -209,7 +206,7 @@ zone_col = c_map['ZONE']
 med_col = c_map['MEDICAL_NONMED']
 
 # ---------------------------------------------------------------------------------------
-# V. MAIN PORTFOLIO PERFORMANCE METRIC PANELS
+# V. MAIN KPI PORTFOLIO CARDS
 # ---------------------------------------------------------------------------------------
 st.markdown('<div class="main-header"><h2>⚖️ Enterprise Claims Adjudication Auditing & Predictive Suite</h2><p>Advanced real-time systemic bias checking pipelines paired with parallel automated machine learning classifiers.</p></div>', unsafe_allow_html=True)
 
@@ -233,7 +230,7 @@ with metric_col4:
     avg_sa = df[sa_col].mean() if sa_col else 0
     st.markdown(f'<div class="metric-card-wrapper" style="border-top-color:#F59E0B;"><p style="color:#64748B;font-size:14px;margin:0;">MEAN PORTFOLIO EXPOSURE</p><h2 style="color:#F59E0B;margin:5px 0;">₹{avg_sa:,.0f}</h2></div>', unsafe_allow_html=True)
 
-# Main Navigation Layout
+# Main Navigation Layout Slices
 tab_descriptive, tab_diagnostic, tab_modeling, tab_findings = st.tabs([
     "📊 Descriptive Cross-Tabs", "🎯 Diagnostic Bias Probing", "🧠 Super-Learning Classifiers", "📝 Automated Executive Briefing"
 ])
@@ -265,7 +262,7 @@ with tab_descriptive:
         st.plotly_chart(fig_proportions, use_container_width=True)
 
 # =======================================================================================
-# TAB 2: DIAGNOSTIC BIAS PROBING (FIX APPLIED + 100% DYNAMIC GENERATION)
+# TAB 2: DIAGNOSTIC BIAS PROBING (POINTS VALUE CONSTRAINED SAFELY)
 # =======================================================================================
 with tab_diagnostic:
     st.header("🎯 Systemic Bias Diagnostic Probe Engine")
@@ -276,7 +273,6 @@ with tab_diagnostic:
         col_a1, col_a2 = st.columns(2)
         
         with col_a1:
-            # FIX APPLIED: Changed points="outer" to points="outliers" for universal cross-platform support
             fig_age_box = px.box(df, x=tgt_col, y=age_col, color=tgt_col,
                                  color_discrete_sequence=['#3B82F6', '#EF4444'], points="outliers", 
                                  title="Structural Age Distortions vs Claim Resolution")
@@ -289,7 +285,6 @@ with tab_diagnostic:
                                  color_discrete_sequence=['#3B82F6', '#EF4444'])
             st.plotly_chart(fig_age_bar, use_container_width=True)
             
-        # Isolate worst performing structural cohort dynamically
         other_status_cols = [c for c in age_ct_pct.columns if c != approved_status_flag]
         rep_col_pointer = other_status_cols[0] if other_status_cols else age_ct_pct.columns[-1]
         worst_age_bin = age_ct_pct.sort_values(by=rep_col_pointer, ascending=False).index[0]
@@ -325,7 +320,7 @@ with tab_diagnostic:
         st.markdown(f"""
             <div class="anomaly-alert-card">
                 <h4>⚠️ Automated Wealth Concentration Diagnostic:</h4>
-                <p>The statistical mean wealth signature for safe tracking outcomes stands at <b>Hex-Value Formatted: ₹{approved_mean_val:,.2f}</b>, 
+                <p>The statistical mean wealth signature for safe tracking outcomes stands at <b>₹{approved_mean_val:,.2f}</b>, 
                 whereas the dropped/rejected class registers a mean parameter signature of <b>₹{repudiated_mean_val:,.2f}</b>.</p>
             </div>
         """, unsafe_allow_html=True)
@@ -367,7 +362,6 @@ with tab_modeling:
         with st.spinner("Executing transformations..."):
             ml_base_df = df.copy()
             
-            # Prevent data leaks
             unwanted_leakage_keys = ['POLICY_NO', 'PI_NAME', 'DYNAMIC_AGE_BINS', 'INCOME_UNDECLARED_FLAG']
             existing_drop_keys = [k for k in unwanted_leakage_keys if k in ml_base_df.columns]
             ml_base_df = ml_base_df.drop(columns=existing_drop_keys)
@@ -471,15 +465,13 @@ with tab_modeling:
             st.pyplot(fig_plt_cm)
 
 # =======================================================================================
-# TAB 4: EXECUTIVE FINDINGS (100% COMPLETELY DYNAMIC TEXT ENGINE)
+# TAB 4: EXECUTIVE FINDINGS (RESOLVED NAMEERROR CONTEXT)
 # =======================================================================================
-with tab4:
+with tab_findings:
     st.header("📝 Automated Strategic Briefing & Action Register")
     
-    # Pre-calculate active runtime markers dynamically for text generation
     age_ct_live = pd.crosstab(df['DYNAMIC_AGE_BINS'], df[tgt_col], normalize='index') * 100 if age_col else pd.DataFrame()
     zone_ct_live = pd.crosstab(df[zone_col], df[tgt_col], normalize='index') * 100 if zone_col else pd.DataFrame()
-    med_ct_live = pd.crosstab(df[med_col], df[tgt_col], normalize='index') * 100 if med_col else pd.DataFrame()
     
     other_status_cols = [c for c in zone_ct_live.columns if c != approved_status_flag] if not zone_ct_live.empty else []
     rep_col_pointer = other_status_cols[0] if other_status_cols else (df[tgt_col].unique()[-1] if len(df[tgt_col].unique()) > 1 else 'REJECTIONS')
@@ -509,4 +501,4 @@ with tab4:
         champion_model_row = saved_metrics_brief.sort_values(by='Test Accuracy', ascending=False).iloc[0]
         st.info(f"🚀 **Model Audit Finding:** The **{champion_model_row['Model Configuration']}** algorithm is currently the top-performing system, with a validation test accuracy of **{champion_model_row['Test Accuracy']:.2%}** and an F1-Score of **{champion_model_row['F1-Score']:.2%}**.")
     else:
-        st.warning("⚠️ Run the predictive models on Tab 3 to populate this automated system audit log.")
+        st.warning("⚠️ Run the predictive models on the 'Super-Learning Classifiers' tab to populate this automated system audit log.")
